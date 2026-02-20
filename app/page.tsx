@@ -4,20 +4,20 @@ import { useState, useEffect } from "react";
 import { useChat } from "ai/react";
 
 // --- 設定 ---
-// デプロイ先、またはローカルのURL
-const BACKEND_URL = "http://localhost:8000"; 
+// バックエンドのURL（デプロイ済みのCloud Runを指定）
+const BACKEND_URL = "https://medical-ai-engine-backend-895886568528.asia-northeast1.run.app";
 
 export default function MedicalChatApp() {
   const [sessionId, setSessionId] = useState<string>("");
   const [sessionList, setSessionList] = useState<string[]>([]);
 
-  // --- Vercel AI SDK の魔法 ---
-  // messages, input, isLoading などの状態管理をすべて自動で行ってくれます
+  // --- Vercel AI SDK (useChat) の設定 ---
   const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading } = useChat({
     api: `${BACKEND_URL}/chat`,
-    body: { session_id: sessionId }, // バックエンドに渡す追加データ
+    // backendの ChatRequest モデルに合わせて session_id を追加で送信
+    body: { session_id: sessionId }, 
     onFinish: () => {
-      // AIのストリーミング表示が終わったら履歴リストを更新
+      // AIの回答が最後まで表示され、GCS保存が終わったタイミングで履歴一覧を更新
       fetchSessions();
     },
     onError: (error) => {
@@ -36,7 +36,7 @@ export default function MedicalChatApp() {
     const now = new Date();
     const newId = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
     setSessionId(newId);
-    setMessages([]); // 画面をクリア
+    setMessages([]); // 画面のメッセージをクリア
   };
 
   // バックエンドからチャット一覧を取得
@@ -60,8 +60,15 @@ export default function MedicalChatApp() {
       const res = await fetch(`${BACKEND_URL}/history/${id}`);
       if (res.ok) {
         const data = await res.json();
-        // GCSから取得した履歴をVercel AI SDKの形式にセット
-        setMessages(data.history || []);
+        
+        // 【重要】Vercel AI SDK の形式に合わせるため、各メッセージに "id" を付与する
+        const formattedHistory = (data.history || []).map((msg: any, index: number) => ({
+          id: `history-${id}-${index}`, // SDKがメッセージを区別するためのユニークID
+          role: msg.role,
+          content: msg.content,
+        }));
+        
+        setMessages(formattedHistory);
       }
     } catch (error) {
       console.error("履歴読み込み失敗:", error);
@@ -120,8 +127,8 @@ export default function MedicalChatApp() {
             </div>
           )}
           
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+          {messages.map((msg) => (
+            <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-2xl rounded-2xl px-5 py-3 ${
                 msg.role === "user" 
                   ? "bg-blue-600 text-white rounded-br-none" 
@@ -135,7 +142,7 @@ export default function MedicalChatApp() {
           ))}
 
           {/* ストリーミング中（isLoading）で、まだAIの返答が配列に追加されていない一瞬のローディング */}
-          {isLoading && messages[messages.length - 1]?.role === "user" && (
+          {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && (
              <div className="flex justify-start">
                <div className="bg-white border border-zinc-200 text-zinc-500 rounded-2xl rounded-bl-none px-5 py-3 shadow-sm flex items-center gap-2">
                  <span className="animate-pulse">思考中...</span>
@@ -146,7 +153,6 @@ export default function MedicalChatApp() {
 
         {/* 入力エリア */}
         <div className="p-4 bg-white border-t border-zinc-200">
-          {/* useChatが提供するhandleSubmitをそのまま使う */}
           <form onSubmit={handleSubmit} className="max-w-4xl mx-auto flex gap-3">
             <input
               type="text"
