@@ -1,23 +1,29 @@
-"use client"; // Next.jsで画面側の状態（state）を扱うためのおまじない
+"use client";
 
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect } from "react";
+import { useChat } from "ai/react";
 
 // --- 設定 ---
-const BACKEND_URL = "https://medical-ai-engine-backend-895886568528.asia-northeast1.run.app";
-
-// メッセージの型定義
-type Message = {
-  role: "user" | "assistant";
-  content: string;
-};
+// デプロイ先、またはローカルのURL
+const BACKEND_URL = "http://localhost:8000"; 
 
 export default function MedicalChatApp() {
-  // --- 1. セッション状態の初期化 (Streamlitの st.session_state に相当) ---
-  const [messages, setMessages] = useState<Message[]>([]);
   const [sessionId, setSessionId] = useState<string>("");
   const [sessionList, setSessionList] = useState<string[]>([]);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+
+  // --- Vercel AI SDK の魔法 ---
+  // messages, input, isLoading などの状態管理をすべて自動で行ってくれます
+  const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading } = useChat({
+    api: `${BACKEND_URL}/chat`,
+    body: { session_id: sessionId }, // バックエンドに渡す追加データ
+    onFinish: () => {
+      // AIのストリーミング表示が終わったら履歴リストを更新
+      fetchSessions();
+    },
+    onError: (error) => {
+      console.error("チャットエラー:", error);
+    }
+  });
 
   // 初回読み込み時の処理
   useEffect(() => {
@@ -25,7 +31,7 @@ export default function MedicalChatApp() {
     createNewSessionId();
   }, []);
 
-  // 新規チャットIDの生成 (MMDD-HHMMSS)
+  // 新規チャットIDの生成
   const createNewSessionId = () => {
     const now = new Date();
     const newId = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
@@ -49,61 +55,24 @@ export default function MedicalChatApp() {
   // 履歴を読み込む
   const loadHistory = async (id: string) => {
     setSessionId(id);
-    setMessages([]);
-    setIsLoading(true);
+    setMessages([]); // 一旦クリア
     try {
       const res = await fetch(`${BACKEND_URL}/history/${id}`);
       if (res.ok) {
         const data = await res.json();
+        // GCSから取得した履歴をVercel AI SDKの形式にセット
         setMessages(data.history || []);
       }
     } catch (error) {
       console.error("履歴読み込み失敗:", error);
-    } finally {
-      setIsLoading(false);
     }
   };
 
-  // メッセージ送信ロジック
-  const sendMessage = async (e: FormEvent) => {
-    e.preventDefault(); // フォーム送信時の画面リロードを防ぐ
-    if (!input.trim() || isLoading) return;
-
-    const userMessage = input.trim();
-    setInput(""); // 入力欄を空にする
-
-    // 画面に即座に反映
-    const newMessages = [...messages, { role: "user" as const, content: userMessage }];
-    setMessages(newMessages);
-    setIsLoading(true);
-
-    // バックエンドへ送信
-    try {
-      const res = await fetch(`${BACKEND_URL}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage, session_id: sessionId }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setMessages([...newMessages, { role: "assistant", content: data.reply }]);
-        fetchSessions(); // チャット一覧を更新
-      } else {
-        setMessages([...newMessages, { role: "assistant", content: `エラー: ${res.status}` }]);
-      }
-    } catch (error) {
-      setMessages([...newMessages, { role: "assistant", content: `接続失敗: ${error}` }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // --- 画面の描画 (Tailwind CSSでデザイン) ---
+  // --- 画面の描画 ---
   return (
     <div className="flex h-screen bg-zinc-50 text-zinc-900 font-sans">
       
-      {/* サイドバー：チャット管理 */}
+      {/* サイドバー */}
       <div className="w-72 bg-white border-r border-zinc-200 flex flex-col">
         <div className="p-4 border-b border-zinc-200">
           <h1 className="text-xl font-bold flex items-center gap-2">
@@ -145,7 +114,7 @@ export default function MedicalChatApp() {
         
         {/* チャット履歴エリア */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {messages.length === 0 && !isLoading && (
+          {messages.length === 0 && (
             <div className="flex h-full items-center justify-center text-zinc-400">
               メッセージを入力して会話を始めましょう
             </div>
@@ -158,7 +127,6 @@ export default function MedicalChatApp() {
                   ? "bg-blue-600 text-white rounded-br-none" 
                   : "bg-white border border-zinc-200 text-zinc-800 rounded-bl-none shadow-sm"
               }`}>
-                {/* 簡易的な改行対応 */}
                 {msg.content.split('\n').map((line, i) => (
                   <span key={i}>{line}<br/></span>
                 ))}
@@ -166,25 +134,27 @@ export default function MedicalChatApp() {
             </div>
           ))}
 
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="bg-white border border-zinc-200 text-zinc-500 rounded-2xl rounded-bl-none px-5 py-3 shadow-sm flex items-center gap-2">
-                <span className="animate-pulse">思考中...</span>
-              </div>
-            </div>
+          {/* ストリーミング中（isLoading）で、まだAIの返答が配列に追加されていない一瞬のローディング */}
+          {isLoading && messages[messages.length - 1]?.role === "user" && (
+             <div className="flex justify-start">
+               <div className="bg-white border border-zinc-200 text-zinc-500 rounded-2xl rounded-bl-none px-5 py-3 shadow-sm flex items-center gap-2">
+                 <span className="animate-pulse">思考中...</span>
+               </div>
+             </div>
           )}
         </div>
 
         {/* 入力エリア */}
         <div className="p-4 bg-white border-t border-zinc-200">
-          <form onSubmit={sendMessage} className="max-w-4xl mx-auto flex gap-3">
+          {/* useChatが提供するhandleSubmitをそのまま使う */}
+          <form onSubmit={handleSubmit} className="max-w-4xl mx-auto flex gap-3">
             <input
               type="text"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="メッセージを入力..."
+              onChange={handleInputChange}
+              placeholder="症状や質問を入力..."
               disabled={isLoading}
-              className="flex-1 border border-zinc-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-zinc-100"
+              className="flex-1 border border-zinc-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-zinc-100"
             />
             <button
               type="submit"
