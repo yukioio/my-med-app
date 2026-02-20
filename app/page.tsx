@@ -12,12 +12,18 @@ export default function MedicalChatApp() {
   const [sessionList, setSessionList] = useState<string[]>([]);
 
   // useChatの部分
-const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading } = useChat({
+const { messages, input, handleSubmit, handleInputChange } = useChat({
   api: `${BACKEND_URL}/chat`,
-  // ここで session_id をトップレベルに送るように設定
-  body: { session_id: sessionId }, 
-  onFinish: () => {
-    fetchSessions(); // リスト更新
+  body: { session_id: sessionId },
+  // ローカルコードの「reader.read()」と同じ挙動をSDKにさせる設定
+  streamProtocol: 'text', 
+  onResponse: (response) => {
+    // 接続が始まった時の処理
+    console.log("Streaming started");
+  },
+  onFinish: (message) => {
+    // 1文字ずつの表示が完了した時
+    fetchSessions(); 
   }
 });
 
