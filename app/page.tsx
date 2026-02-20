@@ -11,19 +11,15 @@ export default function MedicalChatApp() {
   const [sessionId, setSessionId] = useState<string>("");
   const [sessionList, setSessionList] = useState<string[]>([]);
 
-  // --- Vercel AI SDK (useChat) の設定 ---
-  const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading } = useChat({
-    api: `${BACKEND_URL}/chat`,
-    // backendの ChatRequest モデルに合わせて session_id を追加で送信
-    body: { session_id: sessionId }, 
-    onFinish: () => {
-      // AIの回答が最後まで表示され、GCS保存が終わったタイミングで履歴一覧を更新
-      fetchSessions();
-    },
-    onError: (error) => {
-      console.error("チャットエラー:", error);
-    }
-  });
+  // useChatの部分
+const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading } = useChat({
+  api: `${BACKEND_URL}/chat`,
+  // ここで session_id をトップレベルに送るように設定
+  body: { session_id: sessionId }, 
+  onFinish: () => {
+    fetchSessions(); // リスト更新
+  }
+});
 
   // 初回読み込み時の処理
   useEffect(() => {
